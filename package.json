@@ -1,0 +1,10 @@
+{
+  "name": "kikx-plugin-miri",
+  "version": "0.1.0",
+  "description": "Miri: Wyatt's assistant framework, as a Kikx plugin",
+  "type": "module",
+  "main": "index.mjs",
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {}
+}
