@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  provide(({ registry }) => {
+  provide(({ registry, registerRoute }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -71,6 +71,12 @@ export function setup(provide) {
         };
       }
     }
+
+    // registerRoute comes from the plugin context, already bound to this plugin's name.
+    registerRoute('GET', '/plugin/miri/echo', async ({ request, response }) => {
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ ok: true, plugin: 'miri', method: request.method }));
+    });
 
     registry.registerTool('miri:ping', PingTool);
     registry.registerTool('miri:character_get', CharacterGetTool);
