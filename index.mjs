@@ -114,6 +114,48 @@ export function setup(provide) {
     };
 
     registry.registerTool('miri:ping', PingTool);
+    class CharacterSetTool extends PluginInterface {
+      static pluginID = 'miri';
+      static featureName = 'character_set';
+      static displayName = 'Set Miri character';
+      static description = "Store the acting character's persona. Replaces any existing row for that actor.";
+      static version = '0.1.0';
+      // Writes durable data the assistant will speak from on later turns.
+      static riskLevel = 'high';
+      static inputSchema = {
+        type: 'object',
+        required: ['character'],
+        properties: {
+          actor: { type: 'string', description: 'Actor name; defaults to miri' },
+          character: { type: 'string', description: 'Full durable character description' },
+          compressed: { type: 'string', description: 'Short version for the start brief' },
+        },
+      };
+
+      async _execute(params = {}) {
+        let actor = params.actor || 'miri';
+        if (typeof params.character !== 'string' || !params.character.trim())
+          throw new Error('character_set requires non-empty character text');
+
+        await db().query(
+          `INSERT INTO miri_actor_character (actor, character, compressed, updated_at)
+           VALUES ($1, $2, $3, now())
+           ON CONFLICT (actor) DO UPDATE
+             SET character = EXCLUDED.character,
+                 compressed = EXCLUDED.compressed,
+                 updated_at = now()`,
+          [actor, params.character, params.compressed || null],
+        );
+
+        let row = await db().one(
+          'SELECT actor, character, updated_at FROM miri_actor_character WHERE actor = $1',
+          [actor],
+        );
+        return { actor, saved: true, bytes: row.character.length, updatedAt: row.updated_at };
+      }
+    }
+
+    registry.registerTool('miri:character_set', CharacterSetTool);
     registry.registerTool('miri:character_get', CharacterGetTool);
 
     return registry._miriLifecycle;
