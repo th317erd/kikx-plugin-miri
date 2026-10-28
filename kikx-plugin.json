@@ -1,0 +1,6 @@
+{
+  "name": "kikx-plugin-miri",
+  "version": "0.1.0",
+  "description": "Miri - Wyatt assistant framework",
+  "kikxVersion": ">=0.1.0"
+}
