@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  return provide(({ registry, mountHttp, registerMigrations }) => {
+  return provide(({ registry, mountHttp, registerMigrations, subscribe }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -75,6 +75,9 @@ export function setup(provide) {
     // Relative directories resolve against this plugin, so nothing here knows
     // where the plugin is installed.
     registerMigrations({ directory: 'sql' });
+
+    // Scoped events: this plugin hears about the sessions it names, nothing else.
+    subscribe((event) => console.log('[miri-plugin] event', event.sessionID), { sessions: ['probe'] });
 
     // One mount: everything under /api/plugins/miri/ arrives here and this handler
     // owns the routing. Body bytes are left untouched so a webhook signature can be
