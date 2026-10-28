@@ -110,6 +110,6 @@ export function setup(provide) {
     registry.registerTool('miri:ping', PingTool);
     registry.registerTool('miri:character_get', CharacterGetTool);
 
-    return () => registry._miriLifecycle;
+    return registry._miriLifecycle;
   });
 }
