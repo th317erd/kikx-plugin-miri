@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  provide(({ registry, mountHttp, registerMigrations }) => {
+  return provide(({ registry, mountHttp, registerMigrations }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -100,7 +100,16 @@ export function setup(provide) {
       response.end(JSON.stringify({ error: { message: `No route for ${request.method} ${subPath}` } }));
     });
 
+    // Lifecycle hooks instead of a bare teardown function: onInit runs after every
+    // provide callback, onShutdown before the process exits.
+    registry._miriLifecycle = {
+      onInit()  { console.log('[miri-plugin] onInit'); },
+      onShutdown() { console.log('[miri-plugin] onShutdown'); },
+    };
+
     registry.registerTool('miri:ping', PingTool);
     registry.registerTool('miri:character_get', CharacterGetTool);
+
+    return () => registry._miriLifecycle;
   });
 }
