@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  provide(({ registry, registerRoute }) => {
+  provide(({ registry, mountHttp }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -72,10 +72,28 @@ export function setup(provide) {
       }
     }
 
-    // registerRoute comes from the plugin context, already bound to this plugin's name.
-    registerRoute('GET', '/plugin/miri/echo', async ({ request, response }) => {
-      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ ok: true, plugin: 'miri', method: request.method }));
+    // One mount: everything under /api/plugins/miri/ arrives here and this handler
+    // owns the routing. Body bytes are left untouched so a webhook signature can be
+    // verified later; json() is opt-in.
+    mountHttp(async ({ request, response, subPath, rawBody, json }) => {
+      if (request.method === 'GET' && subPath === '/echo') {
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({
+          ok: true, plugin: 'miri', method: request.method,
+          mount: '/api/plugins/miri/', subPath, rawBytes: rawBody.length,
+        }));
+        return;
+      }
+
+      if (request.method === 'POST' && subPath === '/echo') {
+        let body = json();
+        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ ok: true, received: body, rawBytes: rawBody.length }));
+        return;
+      }
+
+      response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ error: { message: `No route for ${request.method} ${subPath}` } }));
     });
 
     registry.registerTool('miri:ping', PingTool);
