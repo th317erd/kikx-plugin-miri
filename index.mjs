@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  return provide(({ registry, mountHttp, registerMigrations, subscribe, db }) => {
+  return provide(({ registry, mountHttp, registerMigrations, subscribe, db, authorize }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -156,6 +156,29 @@ export function setup(provide) {
     }
 
     registry.registerTool('miri:character_set', CharacterSetTool);
+    class CanTool extends PluginInterface {
+      static pluginID = 'miri';
+      static featureName = 'can';
+      static displayName = 'Check capability';
+      static description = 'Ask whether an actor may perform an action in a scope. Deny by default.';
+      static version = '0.1.0';
+      static riskLevel = 'none';
+      static inputSchema = {
+        type: 'object',
+        required: ['actor', 'action'],
+        properties: {
+          actor: { type: 'string' },
+          action: { type: 'string' },
+          scope: { type: 'object', description: 'Key/value scope the grant must match' },
+        },
+      };
+
+      async _execute(params = {}) {
+        return authorize({ actor: params.actor, action: params.action, scope: params.scope || {} });
+      }
+    }
+
+    registry.registerTool('miri:can', CanTool);
     registry.registerTool('miri:character_get', CharacterGetTool);
 
     return registry._miriLifecycle;
