@@ -14,7 +14,7 @@
 export const pluginName = 'miri';
 
 export function setup(provide) {
-  return provide(({ registry, mountHttp, registerMigrations, subscribe }) => {
+  return provide(({ registry, mountHttp, registerMigrations, subscribe, db }) => {
     // Core classes arrive through the plugin context. A plugin outside the kikx
     // tree cannot resolve the 'kikx' package name, so importing them is not an
     // option and registry.getClass is the sanctioned route.
@@ -58,16 +58,19 @@ export function setup(provide) {
 
       async _execute(params = {}) {
         let actor = params.actor || 'miri';
-        // Phase 1 stub: the character lives here until the database migration lands,
-        // at which point this reads miri_actor_character instead.
+        // scoped handle: only miri_* tables are reachable through it
+        let row = await db().one(
+          'SELECT actor, character, compressed, updated_at FROM miri_actor_character WHERE actor = $1',
+          [actor],
+        );
+        if (!row)
+          return { actor, source: 'missing', note: 'no character row for this actor', guidance: null };
         return {
-          actor,
-          source: 'stub',
-          note: 'Phase 1: character text is not yet migrated to the plugin database.',
-          guidance:
-            'Miri is Wyatt\'s personal assistant: direct, concrete, leads with defects in her own ' +
-            'work, states what she verified versus what she assumed, and never claims authority ' +
-            'she has not been given.',
+          actor: row.actor,
+          source: 'database',
+          guidance: row.character,
+          compressed: row.compressed,
+          updatedAt: row.updated_at,
         };
       }
     }
