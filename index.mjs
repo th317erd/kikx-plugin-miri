@@ -3,15 +3,38 @@
 // =============================================================================
 // kikx-plugin-miri — Miri, as an external Kikx plugin
 // =============================================================================
-// Miri is Wyatt's assistant framework: character, ingestion, policy, tools.
-// This plugin brings all of it into Kikx rather than duplicating what Kikx
-// already does. Anything Kikx can express natively - sessions, scheduling,
-// sub-agents, inter-bot messaging, todo storage - is used, not reimplemented.
+// Miri is Wyatt's assistant framework: character, authority, transport policy,
+// notes, scheduled work. This plugin brings it into Kikx rather than duplicating
+// what Kikx already does natively.
 //
-// Table and database names owned by this plugin carry the `miri_` prefix.
+// STRUCTURE (2026-10-30, parity mission)
+//   index.mjs          this hub: lifecycle, mounts, subscriptions, tool registry
+//   tools/<domain>.mjs one module per Miri namespace family
+//   sql/NNN-*.sql      forward-only migrations, all tables `miri_`-prefixed
+//
+// A tool module exports `registerTools(ctx)` and returns a map of
+// `{ '<pluginID>:<featureName>': ToolClass }`. It receives ONLY the context it
+// needs and must not import from another tool module. That keeps each domain
+// independently editable — two workers can port /notes and /policy in parallel
+// without touching the same file.
+//
+// Table and database names owned by this plugin carry the `miri_` prefix, which
+// the scoped database handle enforces at runtime.
 // =============================================================================
 
+import * as pingTools from './tools/ping.mjs';
+import * as characterTools from './tools/character.mjs';
+import * as policyTools from './tools/policy.mjs';
+
 export const pluginName = 'miri';
+
+// Every tool module, in load order. Adding a domain means adding one line here
+// and one file under tools/.
+const TOOL_MODULES = [
+  pingTools,
+  characterTools,
+  policyTools,
+];
 
 export function setup(provide) {
   return provide(({ registry, mountHttp, registerMigrations, subscribe, db, authorize }) => {
@@ -22,164 +45,90 @@ export function setup(provide) {
     if (!PluginInterface)
       throw new Error('kikx-plugin-miri requires PluginInterface in plugin context');
 
-    class PingTool extends PluginInterface {
-      static pluginID = 'miri';
-      static featureName = 'ping';
-      static displayName = 'Miri ping';
-      static description = 'Confirm the Miri plugin is loaded and reachable. Returns version and time.';
-      static version = '0.1.0';
-      static riskLevel = 'none';
-      static inputSchema = { type: 'object', properties: {} };
+    // The context a tool module is allowed to see. Deliberately small: a module
+    // that wants something new asks for it here, in one place.
+    const toolContext = {
+      pluginID: 'miri',
+      PluginInterface,
+      db,
+      authorize,
+    };
 
-      async _execute() {
-        return {
-          pong: true,
-          plugin: 'miri',
-          version: '0.1.0',
-          now: new Date().toISOString(),
-        };
-      }
-    }
-
-    class CharacterGetTool extends PluginInterface {
-      static pluginID = 'miri';
-      static featureName = 'character_get';
-      static displayName = 'Miri character';
-      static description = "Return the acting character's persona and communication guidance.";
-      static version = '0.1.0';
-      // Reading the character is harmless; it is text the assistant already speaks from.
-      static riskLevel = 'none';
-      static inputSchema = {
-        type: 'object',
-        properties: {
-          actor: { type: 'string', description: 'Actor name; defaults to miri' },
-        },
-      };
-
-      async _execute(params = {}) {
-        let actor = params.actor || 'miri';
-        // scoped handle: only miri_* tables are reachable through it
-        let row = await db().one(
-          'SELECT actor, character, compressed, updated_at FROM miri_actor_character WHERE actor = $1',
-          [actor],
-        );
-        if (!row)
-          return { actor, source: 'missing', note: 'no character row for this actor', guidance: null };
-        return {
-          actor: row.actor,
-          source: 'database',
-          guidance: row.character,
-          compressed: row.compressed,
-          updatedAt: row.updated_at,
-        };
-      }
-    }
-
-    // Relative directories resolve against this plugin, so nothing here knows
-    // where the plugin is installed.
     registerMigrations({ directory: 'sql' });
 
-    // Scoped events: this plugin hears about the sessions it names, nothing else.
-    subscribe((event) => console.log('[miri-plugin] event', event.sessionID), { sessions: ['probe'] });
+    // Load every domain module and register what it declares. A module that
+    // throws is reported and skipped rather than taking the whole plugin down:
+    // one broken domain should not disable character_get.
+    const registered = [];
+    const failedModules = [];
+    for (const mod of TOOL_MODULES) {
+      try {
+        let tools = mod.registerTools(toolContext) || {};
+        for (const [ name, ToolClass ] of Object.entries(tools)) {
+          registry.registerTool(name, ToolClass);
+          registered.push(name);
+        }
+      } catch (err) {
+        failedModules.push(err?.message || String(err));
+        console.error('[miri-plugin] tool module failed:', err?.message || err);
+      }
+    }
 
-    // One mount: everything under /api/plugins/miri/ arrives here and this handler
-    // owns the routing. Body bytes are left untouched so a webhook signature can be
-    // verified later; json() is opt-in.
+    // Loud, not silent. A domain that failed to register is a parity hole and
+    // must be visible at startup rather than discovered later by a missing tool.
+    console.log(`[miri-plugin] registered ${registered.length} tools: ${registered.join(', ')}`);
+    if (failedModules.length)
+      console.error(`[miri-plugin] ${failedModules.length} tool module(s) FAILED to load: ${failedModules.join('; ')}`);
+
+    // Scoped events. NOTE: this subscription is a Phase 1 placeholder and is
+    // still hardcoded to a non-existent session id 'probe'. Session-scoped
+    // delivery to a handler has never been observed. Tracked as a known defect in
+    // docs/kikx-miri/PARITY-MATRIX.md; do not treat it as working.
+    subscribe((event) => console.log('[miri-plugin] event', event.sessionID), { sessions: [ 'probe' ] });
+
+    // One mount: everything under /api/plugins/miri/ arrives here and this
+    // handler owns the routing. Body bytes are left untouched so a webhook
+    // signature can be verified later; json() is opt-in.
     mountHttp(async ({ request, response, subPath, rawBody, json }) => {
+      const send = (code, body) => {
+        response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify(body));
+      };
+
+      // Parity is measurable from the outside: this endpoint reports exactly
+      // which domains registered and which failed.
+      if (request.method === 'GET' && subPath === '/health') {
+        return send(200, {
+          ok: failedModules.length === 0,
+          plugin: 'miri',
+          toolCount: registered.length,
+          tools: registered,
+          failedModules,
+        });
+      }
+
       if (request.method === 'GET' && subPath === '/echo') {
-        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        response.end(JSON.stringify({
+        return send(200, {
           ok: true, plugin: 'miri', method: request.method,
           mount: '/api/plugins/miri/', subPath, rawBytes: rawBody.length,
-        }));
-        return;
+        });
       }
 
       if (request.method === 'POST' && subPath === '/echo') {
-        let body = json();
-        response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        response.end(JSON.stringify({ ok: true, received: body, rawBytes: rawBody.length }));
-        return;
+        return send(200, { ok: true, received: json(), rawBytes: rawBody.length });
       }
 
-      response.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ error: { message: `No route for ${request.method} ${subPath}` } }));
+      return send(404, { error: { message: `No route for ${request.method} ${subPath}` } });
     });
 
     // Lifecycle hooks instead of a bare teardown function: onInit runs after every
-    // provide callback, onShutdown before the process exits.
+    // provide callback, onShutdown before the process exits. Returning an OBJECT
+    // is required — a returned function is read as a teardown and both hooks are
+    // silently skipped.
     registry._miriLifecycle = {
-      onInit()  { console.log('[miri-plugin] onInit'); },
+      onInit() { console.log(`[miri-plugin] onInit (${registered.length} tools)`); },
       onShutdown() { console.log('[miri-plugin] onShutdown'); },
     };
-
-    registry.registerTool('miri:ping', PingTool);
-    class CharacterSetTool extends PluginInterface {
-      static pluginID = 'miri';
-      static featureName = 'character_set';
-      static displayName = 'Set Miri character';
-      static description = "Store the acting character's persona. Replaces any existing row for that actor.";
-      static version = '0.1.0';
-      // Writes durable data the assistant will speak from on later turns.
-      static riskLevel = 'high';
-      static inputSchema = {
-        type: 'object',
-        required: ['character'],
-        properties: {
-          actor: { type: 'string', description: 'Actor name; defaults to miri' },
-          character: { type: 'string', description: 'Full durable character description' },
-          compressed: { type: 'string', description: 'Short version for the start brief' },
-        },
-      };
-
-      async _execute(params = {}) {
-        let actor = params.actor || 'miri';
-        if (typeof params.character !== 'string' || !params.character.trim())
-          throw new Error('character_set requires non-empty character text');
-
-        await db().query(
-          `INSERT INTO miri_actor_character (actor, character, compressed, updated_at)
-           VALUES ($1, $2, $3, now())
-           ON CONFLICT (actor) DO UPDATE
-             SET character = EXCLUDED.character,
-                 compressed = EXCLUDED.compressed,
-                 updated_at = now()`,
-          [actor, params.character, params.compressed || null],
-        );
-
-        let row = await db().one(
-          'SELECT actor, character, updated_at FROM miri_actor_character WHERE actor = $1',
-          [actor],
-        );
-        return { actor, saved: true, bytes: row.character.length, updatedAt: row.updated_at };
-      }
-    }
-
-    registry.registerTool('miri:character_set', CharacterSetTool);
-    class CanTool extends PluginInterface {
-      static pluginID = 'miri';
-      static featureName = 'can';
-      static displayName = 'Check capability';
-      static description = 'Ask whether an actor may perform an action in a scope. Deny by default.';
-      static version = '0.1.0';
-      static riskLevel = 'none';
-      static inputSchema = {
-        type: 'object',
-        required: ['actor', 'action'],
-        properties: {
-          actor: { type: 'string' },
-          action: { type: 'string' },
-          scope: { type: 'object', description: 'Key/value scope the grant must match' },
-        },
-      };
-
-      async _execute(params = {}) {
-        return authorize({ actor: params.actor, action: params.action, scope: params.scope || {} });
-      }
-    }
-
-    registry.registerTool('miri:can', CanTool);
-    registry.registerTool('miri:character_get', CharacterGetTool);
 
     return registry._miriLifecycle;
   });
