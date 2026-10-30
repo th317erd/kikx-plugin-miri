@@ -169,7 +169,7 @@ export function setup(provide) {
       }
 
       return send(404, { error: { message: `No route for ${request.method} ${subPath}` } });
-    });
+    }, { auth: 'public' });
 
     // Lifecycle hooks instead of a bare teardown function: onInit runs after every
     // provide callback, onShutdown before the process exits. Returning an OBJECT
