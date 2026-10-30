@@ -11,11 +11,33 @@
 //
 // Deny by default. A grant must exist, match the action exactly, and match every
 // key in the request's scope. No grant means no.
+//
+// ---------------------------------------------------------------------------
+// SCOPE COMPARISON — read this before changing any predicate here.
+//
+// `scope_json::text` is NOT the JSON you passed in. PostgreSQL renders JSONB with
+// a space after each colon:
+//
+//     JSON.stringify({channel:'probe'})  ->  {"channel":"probe"}    len 19
+//     scope_json::text                   ->  {"channel": "probe"}   len 20
+//
+// So `COALESCE(scope_json::text,'') = COALESCE($3,'')` never matches, and a
+// DELETE built on it silently removes nothing while reporting success. That was a
+// real bug in this file, proven against the live database: the predicate returned
+// rowCount=0 for a grant it had just written.
+//
+// Comparison is therefore by JSONB identity — `scope_json IS NOT DISTINCT FROM
+// $2::jsonb` — which is format-insensitive and NULL-safe in one operator.
+// The COALESCE(...::text) form is kept ONLY inside the ON CONFLICT target, where
+// it must textually match the unique index expression, and for GROUP BY keys.
+// ---------------------------------------------------------------------------
 
 export function registerTools({ PluginInterface, db, authorize }) {
   // Capabilities are `<domain>.<verb>` or `<domain>.<verb>.<scope>`.
   // Kept narrow on purpose: an over-broad pattern would let a typo grant a world.
   const ACTION_PATTERN = '^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+){1,4}$';
+
+  const scopeText = (scope) => (scope === null || scope === undefined ? null : JSON.stringify(scope));
 
   class CanTool extends PluginInterface {
     static pluginID = 'miri';
@@ -167,22 +189,23 @@ export function registerTools({ PluginInterface, db, authorize }) {
       if (!actor || !action) throw new Error('policy_grant requires actor and action');
       let scope = params.scope === undefined ? null : params.scope;
 
+      // ON CONFLICT target must textually match the unique index expression.
       await db().query(
         `INSERT INTO miri_capability (actor, action, scope_json, granted_by)
          VALUES ($1, $2, $3::jsonb, $4)
          ON CONFLICT (actor, action, COALESCE(scope_json::text, '')) DO UPDATE
            SET granted_at = now(), granted_by = EXCLUDED.granted_by`,
-        [ actor, action, scope === null ? null : JSON.stringify(scope), params.grantedBy || 'miri' ],
+        [ actor, action, scopeText(scope), params.grantedBy || 'miri' ],
       );
 
-      // Read it back rather than reporting the input. A write that did not land
-      // and a write that did look identical from the outside otherwise.
+      // Read it back rather than reporting the input, using JSONB identity so the
+      // comparison is not defeated by JSONB's own formatting.
       let row = await db().one(
         `SELECT actor, action, scope_json, granted_at
            FROM miri_capability
           WHERE actor = $1 AND action = $2
-            AND COALESCE(scope_json::text, '') = COALESCE($3, '')`,
-        [ actor, action, scope === null ? null : JSON.stringify(scope) ],
+            AND scope_json IS NOT DISTINCT FROM $3::jsonb`,
+        [ actor, action, scopeText(scope) ],
       );
       if (!row) throw new Error('grant did not persist; no row found on read-back');
       return {
@@ -220,8 +243,8 @@ export function registerTools({ PluginInterface, db, authorize }) {
       let result = await db().query(
         `DELETE FROM miri_capability
           WHERE actor = $1 AND action = $2
-            AND COALESCE(scope_json::text, '') = COALESCE($3, '')`,
-        [ actor, action, scope === null ? null : JSON.stringify(scope) ],
+            AND scope_json IS NOT DISTINCT FROM $3::jsonb`,
+        [ actor, action, scopeText(scope) ],
       );
       let deleted = result?.rowCount ?? 0;
       return {
