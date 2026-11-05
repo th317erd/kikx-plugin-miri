@@ -127,7 +127,7 @@ async function callMount(handler, { method = 'GET', subPath, body = Buffer.alloc
   ok('one HTTP mount was installed', h.httpHandlers.length === 1);
 
   const expected = [
-    'miri:ping', 'miri:character_get', 'miri:character_set', 'miri:character_list',
+    'miri:ping',
     'miri:can', 'miri:policy_actors', 'miri:policy_roles', 'miri:policy_who',
     'miri:policy_grant', 'miri:policy_revoke',
     'miri:notes_add', 'miri:notes_get', 'miri:notes_list', 'miri:notes_search',

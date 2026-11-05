@@ -23,7 +23,6 @@
 // =============================================================================
 
 import * as pingTools from './tools/ping.mjs';
-import * as characterTools from './tools/character.mjs';
 import * as policyTools from './tools/policy.mjs';
 import * as notesTools from './tools/notes.mjs';
 
@@ -37,7 +36,6 @@ const EVENT_SESSIONS_KEY = 'miri.event_sessions';
 // and one file under tools/.
 const TOOL_MODULES = [
   pingTools,
-  characterTools,
   policyTools,
   notesTools,
 ];

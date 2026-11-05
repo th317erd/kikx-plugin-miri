@@ -5,8 +5,14 @@ Miri — Wyatt's assistant framework — as an external Kikx plugin.
 Miri is not a second framework running beside Kikx. Where Kikx already provides a capability
 (sessions, scheduling, sub-agents, session merging, inter-bot messaging, todo storage, fuzzy
 database search, bot storage) the plugin **uses Kikx** rather than reimplementing it. The plugin
-contributes what is specific to Miri: the character, ingestion lanes, the authority model, and
-Miri's own tools.
+contributes what is specific to Miri: the ingestion lanes, the authority model, and Miri's own
+tools.
+
+## Tool priority
+
+**Kikx tools take priority over similar Miri framework tools.** Where Kikx provides a native
+tool (character profiles, scheduling, Discord, todos, sessions), the agent must use the Kikx
+tool; Miri tools exist only for what Kikx does not provide.
 
 ## Prefix
 
@@ -21,7 +27,6 @@ Phase 1 — skeleton. Two tools prove the plugin loads, registers, and executes:
 | Tool | Risk | Returns |
 |---|---|---|
 | `miri:ping` | none | `{ pong, plugin, version, now }` |
-| `miri:character_get` | none | the acting character's guidance (currently a stub) |
 
 ## Install
 
